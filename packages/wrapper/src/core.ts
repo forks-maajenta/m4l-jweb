@@ -542,7 +542,12 @@ function window(id: string): void {
   var prev = replyWindow;
   replyWindow = id;
   try {
-    if (selector === "ui_ready") ui_ready();
+    // A window's page reporting in is the one signal that it was just opened, so
+    // it is also when the size poll is worth running again. See followWindowSizes.
+    if (selector === "ui_ready") {
+      ui_ready();
+      followWindowSizes();
+    }
     else if (selector === "get_state") get_state(String(args[0]));
     else if (selector === "sync_state") (sync_state as any).apply(null, args);
     // A window's page owns the code in devices like this one, so it is the page
@@ -555,6 +560,10 @@ function window(id: string): void {
     else if (selector === "param_label") param_label(String(args[0]), args.slice(1).join(" "));
     else if (selector === "param_unit") param_unit(String(args[0]), args.slice(1).join(" "));
     else if (selector === "param_range") param_range(String(args[0]), Number(args[1]), Number(args[2]));
+    // A window's page has a console nobody can open: jweb ships no inspector, so a
+    // `console.warn` in there is written to a place with no reader. `log` is the
+    // door out - the page says it, and it lands in the Max window with the rest.
+    else if (selector === "log") post("m4l-jweb: window " + id + ": " + args.join(" ") + "\n");
     else if (typeof onWindowMessage === "function") (onWindowMessage as any).apply(null, [id, selector].concat(args as any[]));
     else post("m4l-jweb: window " + id + " sent unhandled '" + selector + "'\n");
   } finally {
@@ -686,6 +695,14 @@ var sentWindowUrls: { [id: string]: string } = {};
  * reports only what it is asked. So this polls, cheaply, and only while the window
  * is actually open.
  *
+ * ON macOS THE POLL IS NOT FREE. Reading a subpatcher's `wind` makes Max print
+ * `The Max function "SendMessage" returned with error 9999: Internal error.` - not
+ * a JS exception, so the try/catch below never sees it, and at two ticks a second
+ * it buries every other line in the console. The poll therefore RUNS FOR A WHILE
+ * AND STOPS: POLL_TICKS ticks, re-armed each time a window's page reports in. A
+ * window dragged bigger long after it opened is no longer followed, which is the
+ * price of a console somebody can read.
+ *
  * WHY IT MAY NOT WORK, and what to watch. This repo has already measured that
  * setting `presentation_rect` at runtime is accepted but NOT redrawn in a frozen
  * M4L device (see setNativeHidden). That was the device view, which is Live's
@@ -698,13 +715,19 @@ var resizeTask: Task | null = null;
 /** The last size applied per window, so the log is one line and not one per poll. */
 var appliedSize: { [id: string]: string } = {};
 
+/** Half-second ticks the poll runs before it stops. 30 is fifteen seconds. */
+var POLL_TICKS = 30;
+
 function followWindowSizes(): void {
   if (headless()) return; // no windows without a browser to put one in
   var ids = listWindowIds();
   if (!ids.length) return;
   if (resizeTask) resizeTask.cancel();
+  var left = POLL_TICKS;
   resizeTask = new Task(function () {
     for (var i = 0; i < ids.length; i++) fitWindowPage(ids[i]);
+    left -= 1;
+    if (left <= 0 && resizeTask) resizeTask.cancel();
   }, this);
   resizeTask.interval = 500;
   resizeTask.repeat();
