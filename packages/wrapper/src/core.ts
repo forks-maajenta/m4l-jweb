@@ -175,8 +175,20 @@ function open_url(url: string): void {
  * wrapper had sent it. One selector and one value, for the reason reply() gives.
  */
 function window_send(winId: string, selector: string, value: unknown): void {
+  // The FIRST of each selector is logged and the rest are not. A knob sends sixty a
+  // second, so logging all of them is unusable; logging none leaves the one question
+  // this path ever raises - did the message leave the device view at all - with no
+  // way to answer it short of editing the library.
+  var seen = winId + "/" + selector;
+  if (!sentOnce[seen]) {
+    sentOnce[seen] = true;
+    post("m4l-jweb: window_send " + winId + " " + selector + " " + String(value) + " (first of its kind)\n");
+  }
   messnamed("window-read-" + winId, selector, value);
 }
+
+/** Which window/selector pairs have already been logged once. */
+var sentOnce: { [key: string]: boolean } = {};
 
 /**
  * How loud a sounding window is, on its way to the DEVICE VIEW's page.
