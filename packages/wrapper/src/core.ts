@@ -592,8 +592,13 @@ function loadWebview(): void {
   try {
     var url = resolveUiUrl();
     if (!url) return;
-    outlet(0, "url", url);
-    post("m4l-jweb: sent url " + url + "\n");
+    // `read <url>` is the message that LOADS a page. `url` is jweb's own OUTPUT:
+    // the reference lists it among the two messages the object sends after a
+    // successful read (`url <final url>` and `title <title>`), and jweb's message
+    // list has no `url` input at all. Sending `url` therefore loads nothing and
+    // reports nothing - the console says the right path and the view stays grey.
+    outlet(0, "read", url);
+    post("m4l-jweb: sent read " + url + "\n");
 
     loadWindows();
   } catch (e) {
@@ -657,10 +662,12 @@ function loadWindows(): void {
  * and a visible second load.
  */
 function sendWindowUrl(winId: string, target: string): void {
-  var url = encodeURI("file:///" + target) + "?v=" + encodeURIComponent(buildStamp());
+  var url = fileUrl(target) + "?v=" + encodeURIComponent(buildStamp());
   if (sentWindowUrls[winId] === url) return;
   sentWindowUrls[winId] = url;
-  messnamed("window-read-" + winId, "url", url);
+  // `read`, for the same reason as in loadWebview - and the receive this lands on
+  // is already named window-read-<id>.
+  messnamed("window-read-" + winId, "read", url);
   post("m4l-jweb: window " + winId + " -> " + url + "\n");
 }
 
@@ -802,7 +809,32 @@ function resolveUiUrl(): string | null {
   }
   // Cache-buster: the URL changes per build, so Chromium can never serve a page
   // it cached from a previous build of the same file path.
-  return encodeURI("file:///" + target) + "?v=" + encodeURIComponent(buildStamp());
+  return fileUrl(target) + "?v=" + encodeURIComponent(buildStamp());
+}
+
+/**
+ * A MAX path -> a `file://` URL a browser can open.
+ *
+ * `this.patcher.filepath` is in Max's own path style, and on macOS that style
+ * leads with the volume name and a colon: `Mac:/Users/mac/Music/...`. Pasting
+ * `file:///` onto it gives `file:///Mac:/Users/...`, which the browser resolves as
+ * the literal folder `/Mac:` and cannot find. That is a device view that stays
+ * blank while the console prints a path that looks right.
+ *
+ * Windows is the case the plain concatenation was written for, and it stays: there
+ * the prefix is a drive letter, and `file:///C:/Users/...` is correct. So only a
+ * prefix of two characters or more is stripped.
+ *
+ * The boot volume is what gets stripped to `/`. A device living on a SECOND volume
+ * would need `/Volumes/<name>` instead, and that case is not handled here - Max's
+ * JS has no way to ask which volume booted, and [conformpath] is an object, not
+ * something [js] can call.
+ */
+function fileUrl(maxPath: string): string {
+  var m = /^([^\/:]{2,}):(\/.*)$/.exec(maxPath);
+  var path = m ? m[2] : maxPath;
+  if (path.charAt(0) !== "/") path = "/" + path;
+  return encodeURI("file://" + path);
 }
 
 /** The folder the .amxd lives in, derived from the patcher's own path. */
