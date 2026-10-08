@@ -669,9 +669,18 @@ function loadWindows(): void {
  * the one that runs in a given load), so without this every page is fetched
  * twice. For a small window that is waste; for a `site:` window it is tens of MB
  * and a visible second load.
+ *
+ * NO CACHE-BUSTER ON A SITE WINDOW. The `?v=<stamp>` is ours, but the query string
+ * belongs to the page, and a whole third-party site is entitled to read it. The one
+ * that sent us here does: strudel.cc takes any query as the hash of a shared
+ * pattern, fetches it from its database, and dereferences the answer without
+ * checking it - so our stamp became a pattern id that does not exist, and the
+ * TypeError took the engine's boot down with it. The editor drew, evaluated
+ * nothing, and reported nothing. A site's own assets are content-hashed anyway,
+ * which is what the stamp was there to do.
  */
 function sendWindowUrl(winId: string, target: string): void {
-  var url = fileUrl(target) + "?v=" + encodeURIComponent(buildStamp());
+  var url = fileUrl(target) + (isSiteWindow(winId) ? "" : "?v=" + encodeURIComponent(buildStamp()));
   if (sentWindowUrls[winId] === url) return;
   sentWindowUrls[winId] = url;
   // `read`, for the same reason as in loadWebview - and the receive this lands on
