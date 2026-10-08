@@ -24,6 +24,48 @@ outlets = 2;
  */
 var MODE: string = jsarguments.length > 1 ? String(jsarguments[1]) : "midi";
 
+/**
+ * The global object of this [js], captured where `this` still IS it.
+ *
+ * Inside a function `this` is no longer the jsthis, so a handler cannot be looked
+ * up by name from in there. Taken here, at top level, it stays reachable. See
+ * list() for the one thing it is for.
+ */
+var JSTHIS: Record<string, unknown> = this as unknown as Record<string, unknown>;
+
+/**
+ * `list <selector> <args...>` - the same message, wearing macOS's hat.
+ *
+ * On macOS, [jweb~] delivers a page's `max.outlet("native_hide", "param-play")` to
+ * this [js] as a LIST whose first element happens to be the selector, instead of as
+ * a message NAMED by it. Max then looks for a function called `list`, finds none,
+ * and everything the device view ever says is swallowed by anything(). Measured on
+ * Max 9.0.10 inside Live 12 Suite, 2026-10-07: get_state, param_label, native_show,
+ * native_hide, window_send - every one of them arrived as `list`.
+ *
+ * Nothing about the device view works without this. The native parameters are never
+ * hidden, the pattern never reaches the page, a knob turn never leaves the device,
+ * and the Studio never hears the transport - with no error anywhere, because being
+ * swallowed is what anything() is for.
+ *
+ * So: take the first element as the name, look up the handler, and call it with the
+ * rest. `fn.apply(JSTHIS, ...)` and not a plain call - these are our own functions,
+ * not Max host functions (those crash Live when applied, see outlet/messnamed), and
+ * they need the jsthis that a plain call would have given them.
+ */
+function list(): void {
+  if (!arguments.length) return;
+  var name = String(arguments[0]);
+  var rest: unknown[] = [];
+  for (var i = 1; i < arguments.length; i++) rest.push(arguments[i]);
+  var fn = JSTHIS[name];
+  if (typeof fn !== "function") {
+    (anything as any).apply(JSTHIS, arguments);
+    return;
+  }
+  (fn as (...a: unknown[]) => void).apply(JSTHIS, rest);
+}
+
 post("m4l-jweb: wrapper loaded (build " + buildStamp() + ", mode " + MODE + ")\n");
 
 /** The build this device instance actually is. Injected by the build. */
@@ -85,8 +127,21 @@ function reload(): void {
  * The [jweb] outlet can fan out to this [js] AND to other consumers, so
  * messages meant for someone else land here too. Swallow them instead of
  * logging "js: no function <name>" on every one.
+ *
+ * It swallows them SILENTLY, which is the right default and was also a blind spot:
+ * a selector that should have had a handler and did not looks, from here, exactly
+ * like a message addressed to somebody else. So the first few are named. The count
+ * is small on purpose - this is a catch-all on a path a knob sweep goes down.
  */
-function anything(): void {}
+var swallowed = 0;
+function anything(): void {
+  if (swallowed >= 20) return;
+  swallowed += 1;
+  var parts: string[] = [];
+  for (var i = 0; i < arguments.length; i++) parts.push(String(arguments[i]));
+  post("m4l-jweb: unhandled '" + String(messagename) + "' " + parts.join(" ") + "\n");
+  if (swallowed === 20) post("m4l-jweb: ...and no more unhandled messages will be named\n");
+}
 
 /* ------------------------------------------------------------------ *
  * Who to answer
@@ -141,6 +196,25 @@ function ui_ready(): void {
 }
 
 /**
+ * `page_log <text...>` - the DEVICE VIEW's way to say something in the Max window.
+ *
+ * jweb ships no inspector, so a page's `console.log` is written where nobody can
+ * read it. Windows got this first (see the `log` selector in window()); the device
+ * view needs it for the same reason and could not have it, which is one page less
+ * than the whole device could speak for itself.
+ *
+ * NOT called `log`. A window's selectors are dispatched by hand, in window()'s own
+ * if-chain, so `log` is safe there; the device view's go through MAX, which looks up
+ * a global function of that name in this [js]. A name as ordinary as `log` is one to
+ * stay away from in a namespace that is not ours.
+ */
+function page_log(): void {
+  var parts: string[] = [];
+  for (var i = 0; i < arguments.length; i++) parts.push(String(arguments[i]));
+  post("m4l-jweb: page: " + parts.join(" ") + "\n");
+}
+
+/**
  * `open_url <url>` - hand a URL to the user's default web browser.
  *
  * `; max launchbrowser <url>` is the only door Max offers, and it is measured to reach the
@@ -175,20 +249,8 @@ function open_url(url: string): void {
  * wrapper had sent it. One selector and one value, for the reason reply() gives.
  */
 function window_send(winId: string, selector: string, value: unknown): void {
-  // The FIRST of each selector is logged and the rest are not. A knob sends sixty a
-  // second, so logging all of them is unusable; logging none leaves the one question
-  // this path ever raises - did the message leave the device view at all - with no
-  // way to answer it short of editing the library.
-  var seen = winId + "/" + selector;
-  if (!sentOnce[seen]) {
-    sentOnce[seen] = true;
-    post("m4l-jweb: window_send " + winId + " " + selector + " " + String(value) + " (first of its kind)\n");
-  }
   messnamed("window-read-" + winId, selector, value);
 }
-
-/** Which window/selector pairs have already been logged once. */
-var sentOnce: { [key: string]: boolean } = {};
 
 /**
  * How loud a sounding window is, on its way to the DEVICE VIEW's page.

@@ -199,6 +199,37 @@ memory, no server, no frame grab), so mirroring one page's canvas into another m
 shipping encoded frames as messages - which costs a synchronous GPU read inside
 whichever page is making the sound.
 
+## macOS: a page's message arrives at `[js]` as a LIST (2026-10-07)
+
+A page calls `max.outlet("native_hide", "param-play")`. On Windows that reaches the
+patcher's `[js]` as a message NAMED `native_hide`, and Max calls the function of that
+name. **On macOS it arrives as a `list` whose first element is the selector.** Max then
+looks for a function called `list`, and a wrapper that does not define one has every
+message from its device view swallowed by its own `anything()` catch-all.
+
+Measured on Max 9.0.10 inside Live 12 Suite. Every selector went the same way:
+
+    unhandled 'list' get_state code
+    unhandled 'list' param_label s1 S1
+    unhandled 'list' native_show obj-jweb
+    unhandled 'list' native_hide param-play
+
+Nothing in the device view works, and nothing says so. The native parameters are never
+hidden, the pattern never reaches the page, a knob turn never leaves the device, and a
+window never hears the transport. It presents as a layout problem, as a dead button, as
+a silent engine - anything but a message that was addressed and never delivered.
+
+The fix is a `list` handler that takes the first element as the name, looks the handler
+up on the jsthis captured at top level, and applies the rest to it. Note that WINDOW
+messages were never affected: they are tagged `window <id> <selector> ...` by the
+patcher and dispatched by hand in the wrapper, so the first atom is always `window` and
+Max's own lookup is never asked for anything else.
+
+**A silent catch-all hides this and everything like it.** `function anything() {}` is
+right - a `[jweb]` outlet fans out, so messages for other consumers do land here - but
+naming the first few costs nothing and is the difference between an afternoon and five
+minutes.
+
 ## `url` is what `[jweb]` SAYS, not what it is told (2026-10-07)
 
 `jweb` and `jweb~` load a page from `read <url or path>`, `readfile <path>`, or the
